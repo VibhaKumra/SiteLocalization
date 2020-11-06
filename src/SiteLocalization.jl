@@ -1,10 +1,14 @@
-# -*- coding: utf-8 -*-
+module SiteLocalization
 using Images
 using ImageFeatures
+using ImageTransformations
 using CoordinateTransformations
 using StaticArrays
+using Statistics
+using Interpolations
 
-#FUNCTIONS
+export SNR, translateim, circle_add!, fit_circles, sigma_norm, rl_deconv, circle_inbounds, masked, stats, intp_polar
+
 t = 2.262; # t-test p=0.05
 function stats(distance, n_theta)
     n = length(distance)
@@ -17,8 +21,11 @@ function stats(distance, n_theta)
     return avgdistance, stdev, n, t0, conf_int
 end
 
-# Adopted from ImageDraw (ellipse2d.jl)
-# Add circle to matrix
+"""
+	circle_add!(img::AbstractArray{T, 2}, center, radius)
+
+Adapted from ImageDraw (ellipse2d.jl). Draws a circle defined by `center` and `radius` to matrix `img`.
+"""
 function circle_add!(img::AbstractArray{T, 2}, center, radius) where T<:Integer
     ys = Int[]
     xs = Int[]
@@ -47,19 +54,11 @@ function circle_add!(img::AbstractArray{T, 2}, center, radius) where T<:Integer
     img
 end
 
-function highpass(img, f)
-    fftimg = fftshift(fft(ifftshift(gray.(img)), 1:2))
-    sx, sy = size(fftimg)
-    for x = 1:sx, y=1:sy
-        if (x - sx/2.0)^2 + (y - sx/2.0)^2 < f^2
-            fftimg[x,y] = 0
-        end
-    end
-    return abs.(fftshift(ifft(ifftshift(fftimg))))
-end
+"""
+	fit_circles(img, highp, lowp, blur,votingthres, mindistance, radius_range)
 
-
-#Function for fitting circles using canny edge detector
+Fit circles using canny edge detection and circle hough transform.
+"""
 function fit_circles(img, highp, lowp, blur,votingthres, mindistance, radius_range)
     #display(typeof(img))
     #img = img .> 0.5
@@ -72,14 +71,23 @@ function fit_circles(img, highp, lowp, blur,votingthres, mindistance, radius_ran
     return centers, radii, img_edge
 end
 
-#Function for finidng circle on original image, polar transformed coordinates
+"""
+	masked(img, center)
+
+Find circle on original image, polar transformed coordinates
+"""
 function masked(img, center)
     transformation = PolarFromCartesian()
     mask = ((transformation(SVector(((i, j) .- center.I)...)), img[i,j]) for i=1:size(img, 1), j=1:size(img, 2))
     return mask
 end
 
-# Discretized polartransform
+
+"""
+	polar_transform(masked, radius)
+
+Discretized polar transform.
+"""
 function polar_transform(masked, radius)
     circ = ceil(Int, 2*π*radius)
     polar_img = fill(-1., radius, circ)
@@ -91,7 +99,11 @@ function polar_transform(masked, radius)
     return polar_img
 end
 
-#Function for duplicating and filling in empty elements of polartransform
+"""
+	duplicate_fill(polar_img)
+
+Duplicate and fill in empty elements of polartransform
+"""
 function duplicate_fill(polar_img)
     ind = size(polar_img)
     polar_full = zeros(ind)
@@ -110,7 +122,11 @@ function duplicate_fill(polar_img)
     return polar_full
 end
 
-# Function for Richardson Lucy Deconvolution
+"""
+	rl_deconv(image::AbstractArray, psf::AbstractArray, iterations::Int)
+
+Deconvolve `image` using the Richardson-Lucy deconvolution algorithm
+"""
 function rl_deconv(image::AbstractArray, psf::AbstractArray, iterations::Int)
     latent_est = Float64.(image)
     psf_hat = reflect(psf)
@@ -127,6 +143,11 @@ function rl_deconv(image::AbstractArray, psf::AbstractArray, iterations::Int)
     return latent_est
 end
 
+"""
+	circle_inbounds(center, radius, sz)
+
+Test if the circle defined by `center` and `radius` is in-bounds for an array with size `sz`.
+"""
 function circle_inbounds(center, radius, sz)
     for i=1:length(sz)
         if (center[i]-radius < 1) || (center[i]+radius > sz[i])
@@ -147,4 +168,68 @@ abstranslation(x) = (-floor(Int, min(x, 0)),ceil(Int, max(x, 0)))
 function translateim(image, d)
     pads = abstranslation.(d)
     warp(padarray(image, Pad(:replicate, (pads[1][1], pads[2][1]), (pads[1][2], pads[2][2]))), Translation(d))[indices_spatial(image)...]
+end
+
+function sigma_clipped_stats(img, sigma=3.0)
+    nchanged = 1
+    m = 0
+    s = 0
+    ori = sort(img[:])
+    signal = ori
+    bot, top = 1, length(ori)
+    while nchanged != 0
+        len = length(signal)
+        mid = fld(len,2)
+        m = if iseven(len)
+            (signal[mid]+signal[mid+1])/2
+        else
+            signal[mid+1]
+        end
+
+        s = std(signal)
+        nbot, ntop = searchsortedfirst(ori, m-sigma*s), searchsortedlast(ori, m+sigma*s)
+        nchanged = abs(bot-nbot)+abs(top-ntop)
+        bot, top = nbot, ntop
+        sig = @view ori[bot:top]
+        signal = sig
+    end
+    return m, s
+end
+
+function sigma_norm(img)
+    img = Float64.(img)
+    m, s = sigma_clipped_stats(img)
+    img .-= m + 3.0*s
+    img = img ./ maximum(img)
+    clamp01.(img)
+end
+
+function read_avg_from_txt(txtfile)
+    avg_text = map(row -> split(row, ',')[2], readlines(txtfile)[1:end-2])
+    return parse.(Float64, map(text -> split(text, ':')[2], avg_text))
+end
+
+function datastats(data, filtfun)
+    println(length(data))
+    data = filter(filtfun, data)
+    err = std(data)/sqrt(length(data))
+    println(mean(data))
+    println(err)
+    return(data, err)
+end
+
+datastats(data) = datastats(data, x->!isnan(x))
+
+
+"""
+    intp_polar(img, radius, angles, center; intp = BSpline(Constant()))
+
+Perform polar transform with interpolation of `img` centered in `center`.
+"""
+function intp_polar(img, radius, angles, center; intp = BSpline(Constant()))
+    interpolator = interpolate(img, intp)
+    [interpolator(center[1]+r*sin(theta),center[2]+r*cos(theta))::Float64 for r in 0.0:1:radius-1.0, theta in angles]
+end
+    
+
 end

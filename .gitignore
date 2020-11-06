@@ -1,2 +1,5 @@
+/Manifest.toml
+/data
+/artifacts
 .ipynb_checkpoints
 *.ipynb

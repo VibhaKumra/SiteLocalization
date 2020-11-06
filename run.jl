@@ -1,146 +1,66 @@
-# -*- coding: utf-8 -*-
-# ---
-# jupyter:
-#   jupytext:
-#     formats: ipynb,jl:light
-#     text_representation:
-#       extension: .jl
-#       format_name: light
-#       format_version: '1.5'
-#       jupytext_version: 1.3.3
-#   kernelspec:
-#     display_name: Julia 1.3.1
-#     language: julia
-#     name: julia-1.3
-# ---
-
-
-include("functionsSiteLoc.jl")
-
+import Pkg
+Pkg.activate(".")
+using SiteLocalization
 using Images
 using ImageDraw
 using Plots
 using StatsPlots
 using Distributions
 using ImageFiltering
+using CoordinateTransformations
 using StatsBase
 using DSP
 using Glob
 using ProgressMeter
 using RegisterQD
-using Photometry
-using ImageTransformations
 using Distances
-using Interpolations
-using Primes
-using ImageIO
-
-
-image = reshape(1:100, (10,10))
-abstranslation(x) = (-floor(Int, min(x, 0)),ceil(Int, max(x, 0)))
-function translateim(image, d)
-    pads = abstranslation.(d)
-    warp(padarray(image, Pad(:replicate, (pads[1][1], pads[2][1]), (pads[1][2], pads[2][2]))), Translation(d))[indices_spatial(image)...]
-end
-translateim(image, (-1.6, -2.8))
-
-padarray(image, Pad(:replicate, (1,2), (3,4)))
-
-# +
-function sigma_clipped_stats(img, sigma=3.0)
-    nchanged = 1
-    m = 0
-    s = 0
-    ori = sort(img[:])
-    signal = oriantb_shift,
-    bot, top = 1, length(ori)
-    while nchanged != 0
-        len = length(signal)
-        mid = fld(len,2)
-        m = if iseven(len)
-            (signal[mid]+signal[mid+1])/2
-        else
-            signal[mid+1]
-        end
-
-        s = std(signal)
-        nbot, ntop = searchsortedfirst(ori, m-sigma*s), searchsortedlast(ori, m+sigma*s)
-        nchanged = abs(bot-nbot)+abs(top-ntop)
-        bot, top = nbot, ntop
-        sig = @view ori[bot:top]
-        signal = sig
-    end
-    return m, s
-end
-
-function sigma_norm(img)
-    img = Float64.(img)
-    m, s = sigma_clipped_stats(img)
-    img .-= m + 3.0*s
-    img = img ./ maximum(img)
-    clamp01.(img)
-end
-
-function read_avg_from_txt(txtfile)
-    avg_text = map(row -> split(row, ',')[2], readlines(txtfile)[1:end-2])
-    return parse.(Float64, map(text -> split(text, ':')[2], avg_text))
-end
-
-function datastats(data, filtfun)
-    println(length(data))
-    data = filter(filtfun, data)
-    err = std(data)/sqrt(length(data))
-    println(mean(data))
-    println(err)
-    return(data, err)
-end
-datastats(data) = datastats(data, x->!isnan(x))
-
-
-
-
+using FileIO
+import GR
+GR.inline("svg")
 gr() #set plotting backend
-Localisationdata= "testruns"
 
 
-open("RESULTS_$Localisationdata.txt", "w") do f
+path = "artifacts"
 
-    #BioformatsLoader.init(memory= 2048)
-    path = "artifacts"
+# Loading Images
+if length(ARGS) > 0
+    get_imgs = ARGS
+else
+    get_imgs = [""] # add images
+end
 
-    #Loading Images
-    image_dirs = [""] # add image directory
-    get_imgs = [fname for d in image_dirs for fname in glob("*.nd2", d)] #read files
-    
-    # Set Variables
-    pixel_size = 30.8/1.5# in nanometers
-    shiftwindow = 3 #for sliding average of peak alignment, 0 if only aligning max of peaks
-    maxpeakswindow = 0 # sliding average for sum of several circles
-    margin = 15 #how much to add on radius of fitted circle
-    rmin = 24 #radius min in pixels
-    rmax= 30 #radius max
-    radius_range = rmin:rmax
-    padded_size(radius) = 2*radius+2
-    
-    #For canny edge detection and circle hough transform
-    highp = 99  #in percentile
-    lowp = 95  #in percentile
-    blur = 3.5 #blur for segmentation
-    votingthres = 24 #in pixels, sensitivity of circle detection
-    mindistance = 50 #in pixels, the minimum distance between two circle centers
-    
-    # For deconvolution
-    PSF = 4 # measured or known sigma of psf
-    psf = Kernel.gaussian([PSF,PSF],[21,21])
-    psf = psf./maximum(psf)
-    iterations = 0 #no of iterations of deconvolution algorithm
-    
-    #ALIGNMENT
-    al_shift = (0.4, -0.15) # adjust for measured chromatic aberration
-    
-    #Setting various variables
-    max_radius = (1 + maximum(radius_range) + margin)*2 #set max size for plots
-    println("max_radius = $max_radius")
+# Set Variables
+pixel_size = 30.8/1.5# in nanometers
+shiftwindow = 7 #for sliding average of peak alignment, 0 if only aligning max of peaks
+maxpeakswindow = 0 # sliding average for sum of several circles
+margin = 20 #how much to add on radius of fitted circle
+rmin = 24 #radius min in pixels
+rmax= 30 #radius max
+radius_range = rmin:rmax
+padded_size(radius) = 2*radius+2
+
+# For canny edge detection and circle hough transform
+highp = 98.8  #in percentile
+lowp = 99.9  #in percentile
+blur = 3.5 #blur for segmentation
+votingthres = 23 #in pixels, sensitivity of circle detection
+mindistance = 50 #in pixels, the minimum distance between two circle centers
+
+# For deconvolution
+psf_sigma = 4 # measured or known sigma of psf
+psf = Kernel.gaussian([psf_sigma,psf_sigma],[21,21])
+psf = psf./maximum(psf)
+iterations = 0 #no of iterations of deconvolution algorithm
+
+# ALIGNMENT
+al_shift = (0.4, -0.15) # adjust for measured chromatic aberration
+
+# Setting various variables
+max_radius = (1 + maximum(radius_range) + margin)*2 #set max size for plots
+
+localisation_data = "testruns"
+open("RESULTS_$localisation_data.txt", "w") do f
+
     allmemb = zeros(padded_size(max_radius))
     allantb = zeros(padded_size(max_radius))
 
@@ -152,35 +72,27 @@ open("RESULTS_$Localisationdata.txt", "w") do f
     # Find max peak for alignment using a sliding average
     window_mean(window,v) = [mean(v[i-window:i+window]) for i=1+window:length(v)-window]
     movmax(window,v) = window + argmax(window_mean(window, v))
-    intp = BSpline(Cubic(Free(OnGrid())))
-    intp = BSpline(Constant())
-    
-    # Function for polar transform 
-    function intp_polar(img, radius, angles, center)
-        interpolator = interpolate(img, intp)
-        [interpolator(center[1]+r*sin(theta),center[2]+r*cos(theta))::Float64 for r in 0.0:1:radius-1.0, theta in angles]
-    end
-    
+
     #Following code run for all imgs in loaded folder
-    for	file_index = 4 #1:Int(length(get_imgs))
-        fname = (get_imgs[file_index])
-        if !isfile(fname)
-            continue
-        end
+    for	file_index = 1:Int(length(get_imgs))
+        fname = get_imgs[file_index]
         
         data_fname = "$path/artifacts/$fname.txt"
-        channels, _ = load(query(fname))
+        channels = [load(file) for file in glob(fname)]
+        if length(channels) == 0
+            println("Found no matching files for: $fname! Skipping...")
+        end
+        if length(channels) == 1 && ndims(channels[1]) != 3
+            channels = channels[1]
+        end
         firstSNRantb = SNR(channels[1][2,:,:])
         firstSNRmemb = SNR(channels[1][1,:,:])
         if firstSNRantb <= 0.03 || firstSNRmemb <= 0.03
            continue
         end
-        println(firstSNRantb)
-        println(firstSNRmemb)
         push!(distance, Array{Float64,1}())
         push!(n_theta, Array{Int,1}())
-        Timeframes = 0
-        @showprogress 1 fname for t = 1
+        @showprogress 1 fname for t = 1:length(channels)
             antibodies = translateim(channels[t][2,:,:], al_shift) |> sigma_norm
             membrane = channels[t][1,:,:] |> sigma_norm
             
@@ -191,7 +103,6 @@ open("RESULTS_$Localisationdata.txt", "w") do f
                 break
             end
             
-            Timeframes = t
             #Deconvolve images
             membrane = rl_deconv(membrane, psf, iterations)
             antibodies = rl_deconv(antibodies, psf, iterations)
@@ -321,7 +232,6 @@ open("RESULTS_$Localisationdata.txt", "w") do f
                 memb_shift, antb_shift = my_norm(memb_shift), my_norm(antb_shift)
                 p = plot([ (1:size(memb_shift,1))*pixel_size],
                     [memb_shift], xlims=[(1+0.5*radius)*pixel_size,(1+1.5*radius)*pixel_size])
-                display(p)
                 savefig(p, "$path/Intensityplotex_WGAsumaligned.svg")
               
                 append!(distance[end], maxPeaksantb - maxPeaksmemb)
@@ -339,7 +249,7 @@ open("RESULTS_$Localisationdata.txt", "w") do f
         if n < 2 && false
             break
         end
-        display("avg:$(avgdistance.*pixel_size) nm,confidence interval:$(conf_int.*pixel_size) nm, std:$(stdev.*pixel_size) nm, n:$n, t0:$(t0), dpts = $avgdistance")
+        println("avg:$(avgdistance.*pixel_size) nm,confidence interval:$(conf_int.*pixel_size) nm, std:$(stdev.*pixel_size) nm, n:$n, t0:$(t0), dpts = $avgdistance")
         write(f, "Stats:, avg:$(avgdistance*pixel_size), std:$(stdev*pixel_size), n:$(n), t0:$(t0), conf_int:$(conf_int*pixel_size)\n")
     end #file_index
 
@@ -351,6 +261,4 @@ open("RESULTS_$Localisationdata.txt", "w") do f
     write(f, "totalmean: $(totalmean*pixel_size), totalstderror: $(totalstdev*pixel_size)\n")
     write(f, "Parameters:,  pixel_size:$pixel_size, shiftwindow:$shiftwindow,  maxpeakswindow:$maxpeakswindow, margin:$margin, radius_range:$radius_range, highp:$highp, lowp:$lowp, blur:$blur, votingthres:$votingthres, mindistance:$mindistance\n")
     write(f, "$distance")
-    
 end
-
