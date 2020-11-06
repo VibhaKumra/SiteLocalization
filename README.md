@@ -1,6 +1,9 @@
 # SiteLocalization
 Binding site localization on non-homogeneous cell surfaces using topological image averaging
 
+## Usage
+![Usage Example](../assets/tty.gif?raw=true)
+
 ## Abstract
 Antibody binding to cell surface proteins plays a crucial role
 in immunity and the location of an epitope can altogether determine
