@@ -201,7 +201,7 @@ function sigma_norm(img)
     m, s = sigma_clipped_stats(img)
     img .-= m + 3.0*s
     img = img ./ maximum(img)
-    clamp01.(img)
+    clamp01nan.(img)
 end
 
 function read_avg_from_txt(txtfile)
@@ -226,9 +226,9 @@ datastats(data) = datastats(data, x->!isnan(x))
 
 Perform polar transform with interpolation of `img` centered in `center`.
 """
-function intp_polar(img, radius, angles, center; intp = BSpline(Constant()))
+function intp_polar(img, radius, angles, center; pxmult=1, intp = BSpline(Constant()))
     interpolator = interpolate(img, intp)
-    [interpolator(center[1]+r*sin(theta),center[2]+r*cos(theta))::Float64 for r in 0.0:1:radius-1.0, theta in angles]
+    [interpolator(center[1]+r*sin(theta),center[2]+r*cos(theta))::Float64 for r in 0.0:1/pxmult:radius-1.0, theta in angles]
 end
     
 

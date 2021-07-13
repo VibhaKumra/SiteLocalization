@@ -3,3 +3,6 @@
 /artifacts
 .ipynb_checkpoints
 *.ipynb
+*.csv
+*.tsv
+*.json
