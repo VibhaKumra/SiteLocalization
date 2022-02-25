@@ -6,11 +6,17 @@ Binding site localization on non-homogeneous cell surfaces using topological ima
 
 ```
 usage: run.jl [--pixelsize PIXELSIZE] [--shiftwindow SHIFTWINDOW]
-              [--iterations ITERATIONS] [--margin MARGIN]
+              [--maxpeakswindow MAXPEAKSWINDOW]
+              [--iterations ITERATIONS] [--psf_sigma PSF_SIGMA]
+              [--highp HIGHP] [--lowp LOWP] [--blur BLUR]
+              [--mindistance MINDISTANCE] [--margin MARGIN]
               [--votingthreshold VOTINGTHRESHOLD] [--rmin RMIN]
-              [--rmax RMAX] [--pxmult PXMULT]
+              [--rmax RMAX] [--pxmult PXMULT] [--al-shifty AL-SHIFTY]
+              [--al-shiftx AL-SHIFTX]
+              [--first-snr-limit FIRST-SNR-LIMIT]
               [--snr-ratio-limit SNR-RATIO-LIMIT] [--limit-outside]
-              [--maxdist MAXDIST] [--debug-plots] [-h] images...
+              [--maxdist MAXDIST] [--debug-plots]
+              [--enable-sigma-norm] [--name NAME] [-h] images...
 
 positional arguments:
   images                images to analyze
@@ -20,10 +26,28 @@ optional arguments:
                         image pixel size in nanometers (type: Float64,
                         default: 20.5333)
   --shiftwindow SHIFTWINDOW
-                        sliding average window (type: Int64, default:
-                        7)
+                        for sliding average of peak alignment, 0 if
+                        only aligning max of peaks (type: Int64,
+                        default: 7)
+  --maxpeakswindow MAXPEAKSWINDOW
+                        sliding average for sum of several circles
+                        (type: Int64, default: 0)
   --iterations ITERATIONS
                         RL iterations (type: Int64, default: 0)
+  --psf_sigma PSF_SIGMA
+                        Measured sigma of psf, for Richardsson Lucy
+                        deconvolution (type: Int64, default: 4)
+  --highp HIGHP         For canny edge detection and circle hough
+                        transform, in percentile (type: Float64,
+                        default: 99.8)
+  --lowp LOWP           For canny edge detection and circle hough
+                        transform, in percentile (type: Float64,
+                        default: 95.0)
+  --blur BLUR           blur for segmentation (type: Float64, default:
+                        3.5)
+  --mindistance MINDISTANCE
+                        in pixels, the minimum distance between two
+                        circle centers (type: Int64, default: 50)
   --margin MARGIN       fitted circle radius margin (type: Int64,
                         default: 20)
   --votingthreshold VOTINGTHRESHOLD
@@ -35,6 +59,15 @@ optional arguments:
                         default: 44)
   --pxmult PXMULT       pixel interpolation (type: Float64, default:
                         2.0)
+  --al-shifty AL-SHIFTY
+                        adjust for measured chromatic aberration
+                        (type: Float64, default: -0.63)
+  --al-shiftx AL-SHIFTX
+                        adjust for measured chromatic aberration
+                        (type: Float64, default: -1.35)
+  --first-snr-limit FIRST-SNR-LIMIT
+                        SNR limit for first frame for analyzing a time
+                        sequence (type: Float64, default: 0.0)
   --snr-ratio-limit SNR-RATIO-LIMIT
                         SNR limit in terms of ratio to SNR of first
                         frame at which to stop analyzing a time
@@ -46,7 +79,11 @@ optional arguments:
                         default: 0)
   --debug-plots         enable saving of plots and images for
                         debugging purposes
+  --enable-sigma-norm   enable saving of plots and images for
+                        debugging purposes
+  --name NAME
   -h, --help            show this help message and exit
+
 ```
 
 ## Abstract

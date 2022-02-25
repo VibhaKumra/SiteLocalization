@@ -36,13 +36,37 @@ function get_args()
             arg_type = Float64
             default = 30.8/1.5
         "--shiftwindow"
-            help = "sliding average window"
+            help = "for sliding average of peak alignment, 0 if only aligning max of peaks"
             arg_type = Int
             default = 7
+        "--maxpeakswindow"
+            help = "sliding average for sum of several circles"
+            arg_type = Int
+            default = 0
         "--iterations"
             help = "RL iterations"
             arg_type = Int
             default = 0
+        "--psf_sigma"
+            help = "Measured sigma of psf, for Richardsson Lucy deconvolution"
+            arg_type = Int
+            default = 4
+        "--highp"
+            help = "For canny edge detection and circle hough transform, in percentile"
+            arg_type = Float64
+            default = 99.8
+        "--lowp"
+            help = "For canny edge detection and circle hough transform, in percentile"
+            arg_type = Float64
+            default = 95.0
+        "--blur"
+            help = "blur for segmentation"
+            arg_type = Float64
+            default = 3.5
+        "--mindistance"
+            help = "in pixels, the minimum distance between two circle centers"
+            arg_type = Int
+            default = 50
         "--margin"
             help = "fitted circle radius margin"
             arg_type = Int
@@ -63,6 +87,18 @@ function get_args()
             help = "pixel interpolation"
             arg_type = Float64
             default = 2.0
+        "--al-shifty"
+            help = "adjust for measured chromatic aberration"
+            arg_type = Float64
+            default = -0.63
+        "--al-shiftx"
+            help = "adjust for measured chromatic aberration"
+            arg_type = Float64
+            default = -1.35
+        "--first-snr-limit"
+            help = "SNR limit for first frame for analyzing a time sequence"
+            arg_type = Float64
+            default = 0.0
         "--snr-ratio-limit"
             help = "SNR limit in terms of ratio to SNR of first frame at which to stop analyzing a time sequence"
             arg_type = Float64
@@ -80,6 +116,7 @@ function get_args()
         "--enable-sigma-norm"
             help = "enable saving of plots and images for debugging purposes"
             action = :store_true
+        "--name"
         "images"
             help = "images to analyze"
             required = true
@@ -91,9 +128,9 @@ end
 
 padded_size(radius) = 2*radius+2
 function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
-        shiftwindow, maxpeakswindow, margin, radius_range, highp, lowp,
+        shiftwindow, maxpeakswindow, margin, radius_range, highp, lowp, path,
         enable_sigma_norm, blur, votingthres, mindistance, psf, iterations,
-        al_shift, max_radius, maxdist, snr_ratio_limit)
+        al_shift, max_radius, maxdist, snr_ratio_limit, first_SNR_limit, rmin)
     
     allmemb = zeros(padded_size(max_radius))
     allantb = zeros(padded_size(max_radius))
@@ -123,7 +160,7 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
         firstSNRantb = SNR(channels[1][:,:,2])
         firstSNRmemb = SNR(channels[1][:,:,1])
         
-        if firstSNRantb <= 0.03 || firstSNRmemb <= 0.03
+        if firstSNRantb <= first_SNR_limit || firstSNRmemb <= first_SNR_limit
            continue
         end
         push!(distance, Array{Float64,1}())
@@ -247,8 +284,9 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
                 r = 1:radius
                 
                 maxPeaks = mapslices(x -> movmax(shiftwindow, x) , memb_polar_full, dims=(1,))[:]
-                designmethod = Butterworth(5)
-                ff = digitalfilter(Lowpass(0.1),designmethod)
+                #[floor(Int,(rmin)*pxmult):end,:]
+                #designmethod = Butterworth(5)
+                #ff = digitalfilter(Lowpass(0.1),designmethod)
            
                 #maxPeaks = clamp.(round.(Int,filtfilt(ff, maxPeaks)), 1, radius)
 
@@ -288,7 +326,7 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
                 maxPeaksmemb = mapslices(x -> movmax(maxpeakswindow, x), memb_shift, dims=(1,))
                     
                 maxPeaksantb = if limit_outside
-                    maxPeaksantb = map(x -> movmax(maxpeakswindow, x) - 1, [antb_shift[memb_peak:end,i] for (i, memb_peak) in enumerate(maxPeaksmemb)])
+                    maxPeaksantb = map(x -> movmax(maxpeakswindow, x) - 1, [antb_shift[memb_peak-offset:end,i] for (i, memb_peak) in enumerate(maxPeaksmemb)])
                     maxPeaksmemb .+ maxPeaksantb
                 elseif maxdist > 0
                     range(memb_peak) = max(1,floor(Int, memb_peak-maxdist*pxmult)):min(size(antb_shift,1), ceil(Int, memb_peak+maxdist*pxmult))
@@ -310,20 +348,26 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
                 end
                     
                 memb_shift, antb_shift = my_norm(memb_shift), my_norm(antb_shift)
-                    
+
                 if debug_plots && t == 1
                     p = plot(
                             [ (1:size(memb_shift,1))*pixel_size, (1:size(memb_shift,1))*pixel_size ],
                             [memb_shift, antb_shift],
-                            xlims=[(1+0.5*radius)*pixel_size,(1+1.5*radius)*pixel_size])
+                            #xlims=[(1+0.5*radius)*pixel_size,(1+1.5*radius)*pixel_size],
+                            xlims=[(0)*pixel_size,1700],
+                            labels=["Membrane" "Antibody"],
+                            legend=false,
+                            lw=3,
+                            tickfontsize =12
+                    )
 
-                    vline!([maxPeaksantb, maxPeaksmemb]*pixel_size)
-                    annotate!([(maxPeaksantb*pixel_size, antb_shift[maxPeaksantb], "$(maxPeaksantb-maxPeaksmemb) px")])
+                    #vline!([maxPeaksmemb, maxPeaksantb]*pixel_size, labels=["Membrane" "Antibody"])
+                    #annotate!([((maxPeaksantb+maxPeaksmemb)/2*pixel_size, 0.2, "$(maxPeaksantb-maxPeaksmemb) px")])
 
-                    w_img = plot(p, plot(Gray.(imadjustintensity(membrane))),plot(Gray.(imadjustintensity(antibodies))), size=(1500,500), layout=(1,3))
+                    #w_img = plot(p, plot(Gray.(imadjustintensity(membrane))),plot(Gray.(imadjustintensity(antibodies))), size=(1500,500), layout=(1,3))
                     mkpath("$path/Intensityplotex_WGAsumaligned/")
                     
-                    savefig(w_img, "$path/Intensityplotex_WGAsumaligned/$(basename(fname)).svg")
+                    savefig(p, "$path/Intensityplotex_WGAsumaligned/$(basename(fname)).svg")
                 end
               
                 append!(distance[end], (maxPeaksantb - maxPeaksmemb))
@@ -349,9 +393,10 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
         writedlm(csvf, [fname avgdistance stdev avgdistance*pixel_size stdev*pixel_size n t0 conf_int*pixel_size])
         flush(csvf)
     end #file_index
-
-    totalmean = mean(mean.(distance))
-    totalstdev = std(mean.(distance))/sqrt(Int(length(get_imgs)))
+    mean_values = filter(x-> !isnan(x) && x > -100/pixel_size && x< 150/pixel_size, mean.(distance))
+    display(mean_values)
+    totalmean = mean(mean_values)
+    totalstdev = std(mean_values)
     println(totalmean*pixel_size)
     println(totalstdev*pixel_size)
     #Save  txt file of parameters, stats and results
@@ -360,13 +405,13 @@ function main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size,
     write(f, "$distance")
 end
 
-function run_with_args(args)
+function run_with_args(args; name="")
     get_imgs = args["images"]
-
+    offset=24;
     # Set Variables
     pixel_size = args["pixelsize"]/args["pxmult"] # in nanometers
     shiftwindow = args["shiftwindow"] #for sliding average of peak alignment, 0 if only aligning max of peaks
-    maxpeakswindow = 0 # sliding average for sum of several circles
+    maxpeakswindow = args["maxpeakswindow"] # sliding average for sum of several circles
     margin = args["margin"] #how much to add on radius of fitted circle
     rmin = args["rmin"] #radius min in pixels
     rmax = args["rmax"] #radius max
@@ -374,21 +419,23 @@ function run_with_args(args)
     radius_range = rmin:rmax
 
     # For canny edge detection and circle hough transform
-    highp = 99.8  #in percentile
-    lowp = 95.0  #in percentile
-    blur = 3.5 #blur for segmentation
+    highp = args["highp"]  #in percentile
+    lowp = args["lowp"]  #in percentile
+    blur = args["blur"] #blur for segmentation
     votingthres = args["votingthreshold"] #in pixels, sensitivity of circle detection
-    mindistance = 50 #in pixels, the minimum distance between two circle centers
+    mindistance = args["mindistance"] #in pixels, the minimum distance between two circle centers
 
     # For deconvolution
-    psf_sigma = 4 # measured or known sigma of psf
+    psf_sigma = args["psf_sigma"] # measured or known sigma of psf
     psf = Kernel.gaussian([psf_sigma,psf_sigma],[21,21])
     psf = psf./maximum(psf)
     iterations = args["iterations"] #no of iterations of deconvolution algorithm
 
     # ALIGNMENT
     #al_shift = (0.4, -0.15) # adjust for measured chromatic aberration
-    al_shift = (-0.63, -1.35) # adjust for measured chromatic aberration
+   
+    #al_shift = (-0.63, -1.35) # adjust for measured chromatic aberration
+    al_shift = args["al-shifty"], args["al-shiftx"]
 
     # Setting various variables
     max_radius = ceil(Int, (1 + maximum(radius_range) + margin)*args["pxmult"]) #set max size for plots
@@ -401,19 +448,20 @@ function run_with_args(args)
 
     out_dir = "results"
     mkpath(out_dir)
+    artpath = mkpath(joinpath(path, name))
 
-    open(joinpath(out_dir, "$(timestamp)_params.json"), "w") do io
+    open(joinpath(out_dir, "$(timestamp)_$(name)_params.json"), "w") do io
         JSON3.write(io, args)
     end
 
     localisation_data = "testruns"
-    open(joinpath(out_dir, "$(timestamp)_results.tsv"), "w") do csvf
+    open(joinpath(out_dir, "$(timestamp)_$(name)_results.tsv"), "w") do csvf
         writedlm(csvf, ["fname" "avgdistance" "stdev" "avgdistance_micron" "stdev_micron" "n" "t0" "conf_int_micron"])
         open("RESULTS_$localisation_data.txt", "w") do f
             main(f, csvf, get_imgs; debug_plots, pxmult, limit_outside, pixel_size, maxdist=args["maxdist"],
                 shiftwindow, maxpeakswindow, margin, radius_range, highp, lowp, enable_sigma_norm,
                 blur, votingthres, mindistance, psf, iterations, al_shift, max_radius,
-                snr_ratio_limit=args["snr-ratio-limit"]
+                snr_ratio_limit=args["snr-ratio-limit"], first_SNR_limit=args["first-snr-limit"], rmin, path = artpath
                )
         end
     end
